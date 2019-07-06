@@ -372,28 +372,31 @@ static void print_power_desc_icc(__u8 *desc_buf, int vccIndex)
 	printf("\n");
 }
 
-void print_descriptors(char *desc_str, __u8 *desc_buf,
+void print_descriptors(char *desc_str, __u8 *desc_buf, FILE *file,
 		struct desc_field_offset *desc_array, int arr_size)
 {
 	int i;
 	struct desc_field_offset *tmp;
 	char str_buf[STR_BUF_LEN];
 
+	if (!file)
+		file = stdout;
+
 	for (i = 0; i < arr_size; ++i) {
 		tmp = &desc_array[i];
 		if (tmp->width_in_bytes == BYTE) {
-			printf("%s [Byte offset 0x%x]: %s = 0x%x\n", desc_str,
+			fprintf(file, "%s [Byte offset 0x%x]: %s = 0x%x\n", desc_str,
 				tmp->offset, tmp->name, desc_buf[tmp->offset]);
 		} else if (tmp->width_in_bytes == WORD) {
-			printf("%s [Byte offset 0x%x]: %s = 0x%x\n", desc_str,
+			fprintf(file, "%s [Byte offset 0x%x]: %s = 0x%x\n", desc_str,
 				tmp->offset, tmp->name,
 				be16toh(*(__u16 *)&desc_buf[tmp->offset]));
 		} else if (tmp->width_in_bytes == DWORD) {
-			printf("%s [Byte offset 0x%x]: %s = 0x%x\n", desc_str,
+			fprintf(file, "%s [Byte offset 0x%x]: %s = 0x%x\n", desc_str,
 				tmp->offset, tmp->name,
 				be32toh(*(__u32 *)&desc_buf[tmp->offset]));
 		} else if (tmp->width_in_bytes == DDWORD) {
-			printf("%s [Byte offset 0x%x]: %s = 0x%lx\n",
+			fprintf(file, "%s [Byte offset 0x%x]: %s = 0x%lx\n",
 				desc_str, tmp->offset, tmp->name,
 				be64toh(*(__u64 *)&desc_buf[tmp->offset]));
 		} else if ((tmp->width_in_bytes > DDWORD) &&
@@ -401,10 +404,10 @@ void print_descriptors(char *desc_str, __u8 *desc_buf,
 			memset(str_buf, 0, STR_BUF_LEN);
 			memcpy(str_buf, &desc_buf[tmp->offset],
 				tmp->width_in_bytes);
-			printf("%s [Byte offset 0x%x]: %s = %s\n", desc_str,
+			fprintf(file, "%s [Byte offset 0x%x]: %s = %s\n", desc_str,
 				tmp->offset, tmp->name, str_buf);
 		} else {
-			printf("%s [Byte offset 0x%x]: %s Wrong Width = %d",
+			fprintf(file, "%s [Byte offset 0x%x]: %s Wrong Width = %d",
 				desc_str, tmp->offset, tmp->name,
 				tmp->width_in_bytes);
 		}
@@ -563,7 +566,7 @@ static int do_device_desc(int fd)
 		goto out;
 	}
 
-	print_descriptors("Device Descriptor", data_buf,
+	print_descriptors("Device Descriptor", data_buf, NULL,
 			device_desc_field_name,
 			ARRAY_SIZE(device_desc_field_name));
 
@@ -586,11 +589,11 @@ static int do_unit_desc(int fd, __u8 lun)
 	}
 
 	if (lun == 0xc4)
-		print_descriptors("RPMB LUN Descriptor", data_buf,
+		print_descriptors("RPMB LUN Descriptor", data_buf, NULL,
 				device_unit_rpmb_desc_field_name,
 				ARRAY_SIZE(device_unit_rpmb_desc_field_name));
 	else
-		print_descriptors("LUN Descriptor", data_buf,
+		print_descriptors("LUN Descriptor", data_buf, NULL,
 				device_unit_desc_field_name,
 				ARRAY_SIZE(device_unit_desc_field_name));
 
@@ -614,7 +617,7 @@ static int do_interconnect_desc(int fd)
 		goto out;
 	}
 
-	print_descriptors("Interconnect Descriptor", data_buf,
+	print_descriptors("Interconnect Descriptor", data_buf, NULL,
 			device_interconnect_desc_conf_field_name,
 			ARRAY_SIZE(device_interconnect_desc_conf_field_name));
 
@@ -637,7 +640,7 @@ static int do_geo_desc(int fd)
 		goto out;
 	}
 
-	print_descriptors("Geometry Descriptor", data_buf,
+	print_descriptors("Geometry Descriptor", data_buf, NULL,
 			device_geo_desc_conf_field_name,
 			ARRAY_SIZE(device_geo_desc_conf_field_name));
 
@@ -691,7 +694,7 @@ static int do_health_desc(int fd)
 		goto out;
 	}
 
-	print_descriptors("Device Health Descriptor:", data_buf,
+	print_descriptors("Device Health Descriptor:", data_buf, NULL,
 			device_health_desc_conf_field_name,
 			ARRAY_SIZE(device_health_desc_conf_field_name));
 
@@ -742,6 +745,55 @@ static int do_string_desc(int fd, char *str_data, __u8 idn, __u8 opr,
 	return rc;
 }
 
+static int do_read_formatted_desc(char *desc_str, __u8 *desc_buf, FILE *file,
+		struct desc_field_offset *desc_array, int arr_size)
+{
+	int i;
+	struct desc_field_offset *tmp;
+	int ret = OK;
+
+	if (!file)
+		file = stdout;
+
+	for (i = 0; i < arr_size; ++i) {
+		tmp = &desc_array[i];
+		if (tmp->width_in_bytes == BYTE) {
+			ret = fscanf(file, "%*[^=]= 0x%hhx\n", &desc_buf[tmp->offset]);
+			if (ret != 1)
+				return ERROR;
+		} else if (tmp->width_in_bytes == WORD) {
+			__u16 val;
+
+			ret = fscanf(file, "%*[^=]= 0x%hx\n", &val);
+			if (ret != 1)
+				return ERROR;
+			val = htobe16(val);
+			memcpy(&desc_buf[tmp->offset], &val, sizeof(val));
+		} else if (tmp->width_in_bytes == DWORD) {
+			__u32 val;
+
+			ret = fscanf(file, "%*[^=]= 0x%x\n", &val);
+			if (ret != 1)
+				return ERROR;
+			val = htobe32(val);
+			memcpy(&desc_buf[tmp->offset], &val, sizeof(val));
+		} else if (tmp->width_in_bytes == DDWORD) {
+			__u64 val;
+
+			ret = fscanf(file, "%*[^=]= 0x%llx\n", &val);
+			if (ret != 1)
+				return ERROR;
+			memcpy(&desc_buf[tmp->offset], &val, sizeof(val));
+		} else {
+			printf("%s [Byte offset 0x%x]: Wrong Width = %d",
+				desc_str, tmp->offset, tmp->width_in_bytes);
+				return ERROR;
+		}
+	}
+
+	return OK;
+}
+
 static int do_conf_desc(int fd, __u8 opt, __u8 index, char *data_file)
 {
 	int rc = OK;
@@ -749,23 +801,37 @@ static int do_conf_desc(int fd, __u8 opt, __u8 index, char *data_file)
 	struct ufs_bsg_reply bsg_rsp = {0};
 	__u8 conf_desc_buf[QUERY_DESC_CONFIGURAION_MAX_SIZE] = {0};
 	int offset, i;
-	int data_fd;
+	FILE *data_fd;
 	char *filename_header = "config_desc_data_ind_%d";
 	char output_file[30] = {0};
 
 	if (opt == WRITE) {
-		data_fd = open(data_file, O_RDONLY);
-		if (data_fd < 0) {
+		data_fd = fopen(data_file, "r");
+		if (!data_fd) {
 			perror("can't open input file");
 			return ERROR;
 		}
-		if (read(data_fd, conf_desc_buf,
-			QUERY_DESC_CONFIGURAION_MAX_SIZE) !=
-			QUERY_DESC_CONFIGURAION_MAX_SIZE) {
-			print_error("Could not read config data from  %s file",
-				data_file);
-			rc = ERROR;
+
+		rc = do_read_formatted_desc("Config Device Descriptor:",
+				conf_desc_buf, data_fd,
+				device_config_desc_field_name,
+				ARRAY_SIZE(device_config_desc_field_name));
+		if (rc) {
+			printf("Failed 1\n");
 			goto out;
+		}
+
+		for (i = 0 ; i < 8; i++) {
+			offset = (16 * (i+1));
+			rc = fscanf(data_fd, "%*[^:]:\n");
+			rc = do_read_formatted_desc("Config Descriptor:",
+				conf_desc_buf + offset, data_fd,
+				device_config_unit_desc_field_name,
+				ARRAY_SIZE(device_config_unit_desc_field_name));
+			if (rc) {
+				printf("Failed 2\n");
+				goto out;
+			}
 		}
 
 		rc = do_write_desc(fd, &bsg_req, &bsg_rsp,
@@ -779,40 +845,31 @@ static int do_conf_desc(int fd, __u8 opt, __u8 index, char *data_file)
 				QUERY_DESC_IDN_CONFIGURAION,
 				index, QUERY_DESC_CONFIGURAION_MAX_SIZE,
 				conf_desc_buf);
+		sprintf(output_file, filename_header, index);
+		data_fd = fopen(output_file, "w");
+		if (!data_fd) {
+			perror("can't open output file");
+			data_fd = stdout;
+		}
 		if (!rc)
 			print_descriptors("Config Device Descriptor:",
-				conf_desc_buf,
+				conf_desc_buf, data_fd,
 				device_config_desc_field_name,
 				ARRAY_SIZE(device_config_desc_field_name));
 
 		for (i = 0 ; i < 8; i++) {
 			offset = (16 * (i+1));
-			printf("Config %d Unit Descriptor:\n", i);
+			fprintf(data_fd, "Config %d Unit Descriptor:\n", i);
 			print_descriptors("Config Descriptor:",
-				conf_desc_buf + offset,
+				conf_desc_buf + offset, data_fd,
 				device_config_unit_desc_field_name,
 				ARRAY_SIZE(device_config_unit_desc_field_name));
-		}
-		sprintf(output_file, filename_header, index);
-		data_fd = open(output_file, O_WRONLY | O_CREAT,
-				S_IRUSR | S_IWUSR);
-		if (data_fd < 0) {
-			perror("can't open output file");
-			return ERROR;
-		}
-		if (write(data_fd, conf_desc_buf,
-			QUERY_DESC_CONFIGURAION_MAX_SIZE) !=
-			QUERY_DESC_CONFIGURAION_MAX_SIZE) {
-			print_error("Could not write config data into %s file",
-				output_file);
-			rc = ERROR;
-			goto out;
 		}
 		printf("Config Descriptor was written into %s file\n",
 			output_file);
 	}
 out:
-	close(data_fd);
+	fclose(data_fd);
 	return rc;
 }
 
